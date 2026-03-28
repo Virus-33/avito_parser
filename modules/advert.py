@@ -1,0 +1,16 @@
+class Advert:
+    _id: int
+    name: str
+    desc: str
+    price: float
+    address: str
+    published: str
+    views: int
+    link: str
+    status: int
+    phone: str
+    city: str
+    image: int
+    last_cache_update: int
+    ts_cached: str
+    query: str
