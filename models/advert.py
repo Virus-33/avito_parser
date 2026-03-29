@@ -1,5 +1,5 @@
 class Advert:
-    _id: int
+    id_: int
     name: str
     desc: str
     price: float
@@ -8,7 +8,6 @@ class Advert:
     views: int
     link: str
     status: int
-    phone: str
     city: str
     image: int
     last_cache_update: int

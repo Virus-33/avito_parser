@@ -1,20 +1,23 @@
+import os
 from datetime import datetime
 import random
 import sys
-import os
 import time
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
+from selenium.common.exceptions import NoSuchElementException
 from selenium_stealth import stealth
-from modules.advert import Advert
+from models.advert import Advert
+from models.pic import Picture
+from modules.image_handler import get_jpeg
+from modules.db_control import cache, get_cache
 
-# TODO: config existence check
-with open('config.conf', 'r', encoding='utf-8') as config:
-    line = config.readline()
-    target = line[line.find('="') + 2: line.find('\n')]
+
+def get_target(query: str, city: str = 'all'):
+    return f'https://www.avito.ru/{city}/?q={query}'
 
 
 def hide_driver():
@@ -34,7 +37,8 @@ def scroll(driver, long):
 def get_stuff(driver, url):
     driver.get(url)
     scroll(driver, 30)
-    holder = WebDriverWait(driver, 100).until(EC.visibility_of_element_located((By.XPATH, '//div[@data-marker="catalog-serp"]')))
+    holder = WebDriverWait(driver, 100).until(EC.visibility_of_element_located((By.XPATH,
+                                                                                '//div[@data-marker="catalog-serp"]')))
 
     if holder is not None:
         print('found cardholder')
@@ -50,9 +54,32 @@ def fetch_address(driver):
     return address_props[0], address_props[1]
 
 
-def fetch_phone(driver):
-    phone_btn = driver.find_element(By.XPATH, '//button[@data-marker="item-phone-button/card"]')
-    
+def get_all_images(driver, ad_id):
+    try:
+        img_wrap = driver.find_element(By.XPATH, '//ul[@data-marker="image-frame/image-wrapper"]')
+        images = driver.find_elements(By.XPATH, '//li[@data-marker="image-preview/item"]')
+    except NoSuchElementException:
+        return 0
+
+    result: list[Picture] = []
+
+    for i in range(len(images)):
+        temp = Picture()
+        url = img_wrap.get_attribute('data-url')
+        temp.byte = get_jpeg(url)
+        temp.advertisement = ad_id
+        temp.order = i
+        result.append(temp)
+        if i < len(images) - 1:
+            driver.execute_script('arguments[0].click();', i+1)
+    return result
+
+
+def compile_description(paragraphs: list[webdriver.remote.webelement.WebElement]):
+    result = ""
+    for p in paragraphs:
+        result += p.text
+    return result
 
 
 def parse_advert(driver, url):
@@ -73,9 +100,7 @@ def parse_advert(driver, url):
     views = driver.find_element(By.XPATH, '//span[@data-marker="item-view/total-views"]')
     city, address = fetch_address(driver)
 
-
-
-    ad._id = ad_id.text.strip('№&nbsp;')
+    ad.id_ = ad_id.text.strip('№&nbsp;')
     ad.name = title.get_attribute('innerText')
     ad.desc = desc_paragraphs
     ad.price = price.replace('&nbsp;', ' ', 2)
@@ -84,28 +109,47 @@ def parse_advert(driver, url):
     ad.views = views.text.strip('&nbsp;просмотр')
     ad.link = url
     ad.status = 1
-    ad.phone
     ad.city = city
-    ad.images
     ad.last_cache_update = datetime.now().timestamp()
     ad.ts_cached = datetime.now()
     ad.query = sys.argv[1]
 
-
-def compile_description(paragraphs: list[webdriver.remote.webelement.WebElement]):
-    result = ""
-    for p in paragraphs:
-        result += p.text
-    return result
+    images = get_all_images(driver, ad.id_)
+    return ad, images
 
 
+def argument_handler():
+
+    query = ""
+    city = ""
+    next_is_city = False
+
+    for i in range(1, len(sys.argv)):
+        if sys.argv[i].lower() == '-c':
+            if i < len(sys.argv) - 1:
+                city = sys.argv[i+1]
+                next_is_city = True
+        elif next_is_city:
+            next_is_city = False
+            continue
+        else:
+            query += sys.argv[i] + " "
+    return city, query
 
 
 def main():
-    looking_for = target+sys.argv[1]
+
+    city, query = argument_handler()
+
+    looking_for = get_target(query) if city == "" else get_target(query, city)
 
     driver = hide_driver()
 
-    get_stuff(driver, looking_for)
+    links = get_stuff(driver, looking_for)
+
+    for link in links:
+        ad, images = parse_advert(driver, link)
+        cache(ad, images)
 
 
+main()
