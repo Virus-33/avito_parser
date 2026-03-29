@@ -1,8 +1,9 @@
+# говорит сам за себя
 class Advert:
     id_: int
     name: str
     desc: str
-    price: float
+    price: str
     address: str
     published: str
     views: int
