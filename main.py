@@ -1,4 +1,3 @@
-import os
 from datetime import datetime
 import random
 import sys
@@ -8,7 +7,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
-from selenium.common.exceptions import NoSuchElementException
+from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
 from selenium_stealth import stealth
 from models.advert import Advert
 from models.pic import Picture
@@ -30,36 +29,76 @@ def hide_driver():
 
 def scroll(driver, long):
     for _ in range(long):
-        driver.execute_script('window.scrollBy(0,500);')
+        driver.execute_script('window.scrollBy(0, 1000);')
         time.sleep(random.uniform(0.1, 0.3))
+
+
+def get_with_waiting(driver, tag: str, prop: str):
+    return WebDriverWait(driver, 100).until(EC.visibility_of_element_located((By.XPATH,
+                                                                              f'//{tag}[@{prop}]')))
+
+
+def get_with_js_id(driver, id: str):
+    return driver.execute_script(f"""
+        let el = document.querySelector('#{id}');
+        return el ? el.textContent : null;
+    """)
+
+
+def get_with_js_marker(driver, tag, marker: str):
+    return driver.execute_script(f"""
+        let el = document.querySelector('{tag}[{marker}]');
+        return el ? el.textContent : null;
+    """)
 
 
 def get_stuff(driver, url):
     driver.get(url)
-    scroll(driver, 30)
-    holder = WebDriverWait(driver, 100).until(EC.visibility_of_element_located((By.XPATH,
-                                                                                '//div[@data-marker="catalog-serp"]')))
-
-    if holder is not None:
+    urls: list[str] = []
+    for i in range(10):
+        holder = WebDriverWait(driver, 100).until(EC.visibility_of_element_located((By.XPATH,
+                                                                                    '//div[@data-marker="catalog-serp"]')))
+        if holder is None:
+            return []
         print('found cardholder')
+        scroll(driver, 37)
 
-    links = holder.find_elements(By.XPATH, './div[@data-marker="item"]//h2//a[@data-marker="item-title"]')
-    return links
+        links = holder.find_elements(By.XPATH, './div[@data-marker="item"]//h2//a[@data-marker="item-title"]')
+        for link in links:
+            urls.append(link.get_attribute('href'))
+
+        next = WebDriverWait(driver, 100).until(EC.visibility_of_element_located((By.XPATH,
+                                                                                  '//div[@data-marker="pagination-button'
+                                                                                  '/nextPage"]'))).click()
+    return urls
 
 
 def fetch_address(driver):
-    reveal_btn = driver.find_element(By.LINK_TEXT, 'Узнать подробности')
-    driver.execute_script('arguments[0].click();', reveal_btn)
-    address_props = driver.find_elements(By.XPATH, '//div[@itemprop="address"]')
-    return address_props[0], address_props[1]
+    time.sleep(0.8)
+    driver.execute_script("""
+    let link = Array.from(document.querySelectorAll('a')).find(a => a.textContent.trim() === 'Узнать подробности');
+    if (link) link.click();
+    """)
+    WebDriverWait(driver, 100).until(EC.visibility_of_element_located((By.XPATH,
+                                                                       '//div[@itemprop="address"]')))
+    time.sleep(2)
+
+    address_props = driver.execute_script("""
+        return Array.from(document.querySelectorAll('[itemprop="address"]'))
+            .map(el => el.textContent.trim());
+    """)
+
+    return address_props[0], address_props[1][address_props[1].rfind('\n') + 1:]
 
 
 def get_all_images(driver, ad_id):
-    try:
-        img_wrap = driver.find_element(By.XPATH, '//ul[@data-marker="image-frame/image-wrapper"]')
-        images = driver.find_elements(By.XPATH, '//li[@data-marker="image-preview/item"]')
-    except NoSuchElementException:
-        return 0
+    img_wrap = get_with_js_marker(driver, 'ul', 'data-marker="image-frame/image-wrapper"')
+    print('got img wrapper')
+    images = driver.find_elements(By.XPATH, './li[@data-marker="image-preview/item"]')
+    print('got image list')
+    if img_wrap is None:
+        print('found nothing')
+        return []
 
     result: list[Picture] = []
 
@@ -71,14 +110,7 @@ def get_all_images(driver, ad_id):
         temp.order = i
         result.append(temp)
         if i < len(images) - 1:
-            driver.execute_script('arguments[0].click();', i+1)
-    return result
-
-
-def compile_description(paragraphs: list[webdriver.remote.webelement.WebElement]):
-    result = ""
-    for p in paragraphs:
-        result += p.text
+            driver.execute_script('arguments[0].click();', i + 1)
     return result
 
 
@@ -89,24 +121,43 @@ def parse_advert(driver, url):
         return
 
     ad = Advert()
-    title = WebDriverWait(driver, 100).until(EC.visibility_of_element_located((By.XPATH, '//h1[@itemprop="name"]')))
-    desc_packed = driver.find_element(By.XPATH, '//div[@itemprop="description"]')
-    desc_paragraphs = desc_packed.find_elements(By.TAG_NAME, 'p')
-    desc_paragraphs = compile_description(desc_paragraphs)
-    price_box = driver.find_element(By.ID, 'bx_item-price-value')
-    price = price_box.text
-    ad_id = driver.find_element(By.XPATH, '//span[@data-marker="item-view/item-id"]')
-    pub_date = driver.find_element(By.XPATH, '//span[@data-marker="item-view/item-date"]')
-    views = driver.find_element(By.XPATH, '//span[@data-marker="item-view/total-views"]')
+    print('found active one')
+    try:
+        ad.name = get_with_waiting(driver, 'h1', 'itemprop="name"').get_attribute('innerText')
+    except StaleElementReferenceException:
+        ad.name = get_with_js_marker(driver, 'h1', 'itemprop="name"')
+    print('got name')
+    try:
+        ad.desc = get_with_waiting(driver, 'div', 'itemprop="description"').text
+    except StaleElementReferenceException:
+        ad.desc = get_with_js_marker(driver, 'div', 'itemprop="description"')
+    print('got desc')
+    try:
+        ad.price = WebDriverWait(driver, 100).until(EC.presence_of_element_located((By.ID, 'bx_item-price-value'))).text\
+            .replace('&nbsp;', ' ', 2)
+    except StaleElementReferenceException:
+        ad.price = get_with_js_id(driver, 'bx_item-price-value').replace('&nbsp;', ' ', 2)
+    print('got price')
+    try:
+        ad.id_ = get_with_waiting(driver, 'span', 'data-marker="item-view/item-id"').text.strip('№&nbsp;')
+    except StaleElementReferenceException:
+        ad.id_ = get_with_js_marker(driver, 'span', 'data-marker="item-view/item-id"').strip('№&nbsp;')
+    print('got number')
+    try:
+        ad.published = get_with_waiting(driver, 'span', 'data-marker="item-view/item-date"').text.strip(' · ')
+    except StaleElementReferenceException:
+        ad.published = get_with_js_marker(driver, 'span', 'data-marker="item-view/item-date"').text.strip(' · ')
+    print('got date')
+    try:
+        ad.views = get_with_waiting(driver, 'span', 'data-marker="item-view/total-views"').text.strip('&nbsp;просмотр')
+    except StaleElementReferenceException:
+        ad.views = get_with_js_marker(driver, 'span', 'data-marker="item-view/total-views"').strip('&nbsp;просмотр')
+    print('got views')
+
     city, address = fetch_address(driver)
 
-    ad.id_ = ad_id.text.strip('№&nbsp;')
-    ad.name = title.get_attribute('innerText')
-    ad.desc = desc_paragraphs
-    ad.price = price.replace('&nbsp;', ' ', 2)
-    ad.address = address.text
-    ad.published = pub_date.text.strip(' · ')
-    ad.views = views.text.strip('&nbsp;просмотр')
+    print('got address')
+    ad.address = address
     ad.link = url
     ad.status = 1
     ad.city = city
@@ -114,12 +165,15 @@ def parse_advert(driver, url):
     ad.ts_cached = datetime.now()
     ad.query = sys.argv[1]
 
+    '''
+    print('getting images')
     images = get_all_images(driver, ad.id_)
-    return ad, images
+    print(f'gathered {len(images)} pictures')
+    '''
+    return ad  # , images
 
 
 def argument_handler():
-
     query = ""
     city = ""
     next_is_city = False
@@ -127,7 +181,7 @@ def argument_handler():
     for i in range(1, len(sys.argv)):
         if sys.argv[i].lower() == '-c':
             if i < len(sys.argv) - 1:
-                city = sys.argv[i+1]
+                city = sys.argv[i + 1]
                 next_is_city = True
         elif next_is_city:
             next_is_city = False
@@ -138,7 +192,6 @@ def argument_handler():
 
 
 def main():
-
     city, query = argument_handler()
 
     looking_for = get_target(query) if city == "" else get_target(query, city)
@@ -147,9 +200,10 @@ def main():
 
     links = get_stuff(driver, looking_for)
 
+    print('working with links')
     for link in links:
-        ad, images = parse_advert(driver, link)
-        cache(ad, images)
+        ad = parse_advert(driver, link)
+        cache(ad)
 
 
 main()
