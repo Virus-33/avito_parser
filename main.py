@@ -153,6 +153,52 @@ def parse_advert(driver, url):
     return ad
 
 
+# город у нас на вход идёт на русском, надо чтобы на английском
+def translate_city(city_ru: str):
+    city_eng = ""
+    charmap: dict[str: str] = {
+        'а': 'a',
+        'б': 'b',
+        'в': 'v',
+        'г': 'g',
+        'д': 'd',
+        'е': 'e',
+        'ё': 'e',
+        'ж': 'zh',
+        'з': 'z',
+        'и': 'i',
+        'й': 'y',
+        'к': 'k',
+        'л': 'l',
+        'м': 'm',
+        'н': 'n',
+        'о': 'o',
+        'п': 'p',
+        'р': 'r',
+        'с': 's',
+        'т': 't',
+        'у': 'u',
+        'ф': 'f',
+        'х': 'h',
+        'ц': 'ts',
+        'ч': 'ch',
+        'ш': 'sh',
+        'щ': 'sch',
+        'ъ': '',
+        'ы': 'y',
+        'ь': '',
+        'э': 'e',
+        'ю': 'yu',
+        'я': 'ya'
+    }  # у авито видимо свой механизм транслита, некоторые кревые случаи выглядят не как в либах
+    for char in city_ru:
+        if char in charmap:
+            city_eng += charmap[char]
+        else:
+            city_eng += char
+    return city_eng
+
+
 def argument_handler():
     query = ""
     city = ""
@@ -174,7 +220,7 @@ def argument_handler():
 def main():
     city, query = argument_handler()  # чекаем чё в аргументах запуска
 
-    looking_for = get_target(query) if city == "" else get_target(query, city)  # тернарник не боимся, вызываем поиск
+    looking_for = get_target(query) if city == "" else get_target(query, translate_city(city))  # тернарник не боимся, вызываем поиск
 
     driver = hide_driver()  # прячемся под браузером с надстройками чтобы авито не палил что это бот
 
